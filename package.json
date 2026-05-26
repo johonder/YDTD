@@ -1,0 +1,24 @@
+{
+  "name": "ytd",
+  "version": "1.0.0",
+  "description": "YouTube Video Downloader - Direct downloads with REST API, powered by Cloudflare",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler pages dev public --binding",
+    "deploy": "wrangler pages deploy public",
+    "build": "echo 'Static site - no build step required'"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "keywords": [
+    "youtube",
+    "downloader",
+    "video-downloader",
+    "youtube-api",
+    "cloudflare",
+    "cloudflare-pages",
+    "cloudflare-workers"
+  ],
+  "license": "MIT"
+}
