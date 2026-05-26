@@ -1,50 +1,25 @@
-const YT_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
-const YT_API_URL = 'https://www.youtube.com/youtubei/v1/player';
-
-function parseVideoId(url) {
-  if (!url) return null;
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-    /^([a-zA-Z0-9_-]{11})$/
-  ];
-  for (const p of patterns) {
-    const m = url.match(p);
-    if (m) return m[1];
-  }
-  return null;
-}
-
-async function fetchWithRetry(url, options, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const res = await fetch(url, options);
-      if (res.ok) return res;
-      if (res.status === 429 && i < retries - 1) {
-        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
-        continue;
-      }
-      return res;
-    } catch (e) {
-      if (i === retries - 1) throw e;
-      await new Promise(r => setTimeout(r, 1000 * (i + 1)));
-    }
-  }
-  return null;
-}
+import {
+  parseVideoId,
+  formatSize,
+  extractDownloadUrl,
+  getWatchPageData,
+} from '../_extractor.js';
 
 export async function onRequest(context) {
   const { request } = context;
   const url = new URL(request.url);
   const videoUrl = url.searchParams.get('url');
   const itag = url.searchParams.get('itag');
-  const redirect = url.searchParams.get('redirect') !== 'false';
+  const doRedirect = url.searchParams.get('redirect') !== 'false';
+  const doProxy = url.searchParams.get('proxy') === 'true';
+
   const videoId = parseVideoId(videoUrl);
 
   const headers = {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
   };
 
   if (request.method === 'OPTIONS') {
@@ -52,133 +27,129 @@ export async function onRequest(context) {
   }
 
   if (!videoUrl) {
-    return new Response(JSON.stringify({
-      success: false,
-      error: 'Missing "url" parameter.'
-    }), { status: 400, headers });
+    return new Response(JSON.stringify({ success: false, error: 'Missing "url" parameter.' }), { status: 400, headers });
   }
 
   if (!videoId) {
-    return new Response(JSON.stringify({
-      success: false,
-      error: 'Invalid YouTube URL.'
-    }), { status: 400, headers });
+    return new Response(JSON.stringify({ success: false, error: 'Invalid YouTube URL.' }), { status: 400, headers });
   }
 
   try {
-    const body = {
-      context: {
-        client: {
-          clientName: 'ANDROID',
-          clientVersion: '19.09.37',
-          androidSdkVersion: 31,
-          hl: 'en',
-          gl: 'US',
-          osName: 'Android',
-          osVersion: '14',
-          platform: 'MOBILE'
-        }
-      },
-      videoId,
-      playbackContext: {
-        contentPlaybackContext: {
-          vis: 0,
-          splay: false,
-          referer: 'https://www.youtube.com',
-          currentUrl: `/watch?v=${videoId}`,
-          autonavState: 'STATE_NONE'
-        }
-      }
-    };
+    const playerData = await getWatchPageData(videoId);
 
-    const response = await fetchWithRetry(`${YT_API_URL}?key=${YT_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    if (!response) {
-      return new Response(JSON.stringify({
-        success: false,
-        error: 'Failed to reach YouTube API.'
-      }), { status: 502, headers });
+    const playabilityStatus = playerData.playabilityStatus || {};
+    if (playabilityStatus.status !== 'OK') {
+      return new Response(JSON.stringify({ success: false, error: playabilityStatus?.reason || 'Video not available.' }), { status: 400, headers });
     }
 
-    const data = await response.json();
-
-    if (data.playabilityStatus?.status !== 'OK') {
-      return new Response(JSON.stringify({
-        success: false,
-        error: data.playabilityStatus?.reason || 'Video not available.'
-      }), { status: 400, headers });
+    const streamingData = playerData.streamingData;
+    if (!streamingData) {
+      return new Response(JSON.stringify({ success: false, error: 'Could not extract streaming data.' }), { status: 400, headers });
     }
 
-    const allFormats = [
-      ...(data.streamingData?.formats || []),
-      ...(data.streamingData?.adaptiveFormats || [])
-    ];
+    const allFormats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
+    const details = playerData.videoDetails || {};
+    const title = details.title || 'video';
 
     let targetFormat;
     if (itag) {
       targetFormat = allFormats.find(f => f.itag === parseInt(itag));
     } else {
-      targetFormat = allFormats.find(f => f.url && f.qualityLabel && !f.audioChannels);
-      if (!targetFormat) targetFormat = allFormats.find(f => f.url);
+      targetFormat = allFormats.find(f => (f.url || f.signatureCipher || f.cipher) && f.qualityLabel && !f.audioChannels);
+      if (!targetFormat) targetFormat = allFormats.find(f => f.url || f.signatureCipher || f.cipher);
     }
 
     if (!targetFormat) {
       return new Response(JSON.stringify({
-        success: false,
-        error: itag
-          ? `Format with itag ${itag} not found.`
-          : 'No downloadable formats found.'
+        success: false, error: itag ? `Format with itag ${itag} not found.` : 'No downloadable formats found.',
       }), { status: 404, headers });
     }
 
-    let downloadUrl = targetFormat.url;
-
+    const downloadUrl = extractDownloadUrl(targetFormat);
     if (!downloadUrl) {
-      const cipher = targetFormat.signatureCipher || targetFormat.cipher;
-      if (cipher) {
-        const params = new URLSearchParams(cipher);
-        downloadUrl = params.get('url');
-        if (params.get('sp') && params.get('s')) {
-          downloadUrl += `&${params.get('sp')}=${params.get('s')}`;
-        }
-      }
+      return new Response(JSON.stringify({ success: false, error: 'Could not extract download URL for this format.' }), { status: 500, headers });
     }
 
-    if (!downloadUrl) {
-      return new Response(JSON.stringify({
-        success: false,
-        error: 'Could not extract download URL for this format.'
-      }), { status: 500, headers });
-    }
+    const container = targetFormat.mimeType?.includes('mp4') ? 'mp4' :
+                      targetFormat.mimeType?.includes('webm') ? 'webm' :
+                      targetFormat.mimeType?.includes('3gp') ? '3gp' : 'mp4';
+
+    const ext = targetFormat.audioChannels && !targetFormat.width ? 'm4a' : container;
+    const safeTitle = title.replace(/[^\w\s-]/g, '').trim().substring(0, 100);
+    const filename = `${safeTitle}.${ext}`;
 
     const formatInfo = {
       itag: targetFormat.itag,
       quality: targetFormat.qualityLabel || targetFormat.quality || 'unknown',
       mimeType: targetFormat.mimeType?.split(';')[0] || targetFormat.mimeType,
       contentLength: targetFormat.contentLength || null,
+      size: formatSize(parseInt(targetFormat.contentLength) || 0),
       width: targetFormat.width || null,
       height: targetFormat.height || null,
-      fps: targetFormat.fps || null
+      fps: targetFormat.fps || null,
+      container,
+      filename,
     };
 
-    if (redirect) {
-      const downloadHeaders = {
-        ...headers,
-        'Content-Type': 'application/json',
-        'Location': downloadUrl
-      };
-      return new Response(JSON.stringify({
-        success: true,
-        message: 'Redirecting to download...',
-        downloadUrl,
-        format: formatInfo
-      }), {
-        status: 200,
-        headers: downloadHeaders
+    if (doProxy) {
+      try {
+        const proxyHeaders = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Referer': 'https://www.youtube.com/',
+          'Origin': 'https://www.youtube.com',
+        };
+
+        const rangeHeader = request.headers.get('Range');
+        if (rangeHeader) proxyHeaders['Range'] = rangeHeader;
+
+        const proxyRes = await fetch(downloadUrl, { headers: proxyHeaders });
+
+        if (proxyRes.ok || proxyRes.status === 206) {
+          const responseHeaders = new Headers({
+            'Access-Control-Allow-Origin': '*',
+            'Content-Disposition': `attachment; filename="${filename}"`,
+            'Content-Type': targetFormat.mimeType?.split(';')[0] || 'application/octet-stream',
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Expose-Headers': 'Content-Disposition, Content-Length, Accept-Ranges',
+          });
+
+          if (targetFormat.contentLength) {
+            responseHeaders.set('Content-Length', targetFormat.contentLength);
+          }
+
+          const cr = proxyRes.headers.get('Content-Range');
+          if (cr) responseHeaders.set('Content-Range', cr);
+
+          return new Response(proxyRes.body, {
+            status: proxyRes.status,
+            headers: responseHeaders,
+          });
+        }
+
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Proxy download failed. Try again or use direct link.',
+          downloadUrl,
+          format: formatInfo,
+          proxyStatus: proxyRes.status,
+        }), { status: 502, headers });
+      } catch (e) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Proxy failed: ' + e.message,
+          downloadUrl,
+          format: formatInfo,
+        }), { status: 502, headers });
+      }
+    }
+
+    if (doRedirect) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          'Location': downloadUrl,
+          'Access-Control-Allow-Origin': '*',
+        },
       });
     }
 
@@ -186,16 +157,13 @@ export async function onRequest(context) {
       success: true,
       downloadUrl,
       format: formatInfo,
-      note: 'Use the downloadUrl to download the video. This URL may expire.'
-    }, null, 2), {
-      status: 200,
-      headers
-    });
+      note: 'Use downloadUrl to download. URLs expire after a few hours.',
+    }, null, 2), { status: 200, headers });
 
   } catch (err) {
     return new Response(JSON.stringify({
       success: false,
-      error: 'Internal server error: ' + err.message
+      error: 'Internal server error: ' + err.message,
     }), { status: 500, headers });
   }
 }
