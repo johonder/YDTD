@@ -2,3 +2,8 @@ name = "ytd"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "public"
+
+[vars]
+API_KEYS_LIST = "YDTD-DEMO-2024,ytd-pro-key-1,ytd-pro-key-2"
+ENVIRONMENT = "production"
+SITE_NAME = "YTD - YouTube Video Downloader"

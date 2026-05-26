@@ -1,6 +1,6 @@
 # YTD - YouTube Video Downloader
 
-[![Deploy to Cloudflare](https://github.com/yourusername/ytd/actions/workflows/deploy.yml/badge.svg)](https://github.com/yourusername/ytd/actions/workflows/deploy.yml)
+[![Deploy to Cloudflare](https://github.com/johonder/YDTD/actions/workflows/deploy.yml/badge.svg)](https://github.com/johonder/YDTD/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A fast, free YouTube video downloader with a clean web interface and REST API. Built with Cloudflare Pages + Workers for global performance.
@@ -168,7 +168,7 @@ Currently no rate limits. Please be respectful.
 ### Setup
 
 ```bash
-git clone https://github.com/yourusername/ytd.git
+git clone https://github.com/johonder/YDTD.git
 cd ytd
 npm install
 ```
