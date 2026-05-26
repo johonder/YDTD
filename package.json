@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler pages dev public --binding",
-    "deploy": "wrangler pages deploy public",
+    "pages:dev": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy",
     "build": "echo 'Static site - no build step required'"
   },
   "devDependencies": {
